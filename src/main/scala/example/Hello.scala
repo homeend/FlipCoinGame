@@ -1,6 +1,6 @@
 package example
 
-import cats.Monad
+import cats.{Comparison, Monad}
 import cats.effect.{ExitCode, IO, IOApp, Sync}
 import cats.syntax.all._
 import example.Game._
@@ -52,18 +52,43 @@ object Side {
   final case object Tails extends Side
 }
 
+sealed abstract class Command(val value: String)
+sealed abstract class EmptyCommand extends Command("")
+sealed abstract class Side2 extends EmptyCommand
+
+final object Heads2 extends Side2
+final object Tails2 extends Side2
+final object Quit extends EmptyCommand
+final case class Unknown(str: String) extends Command(str)
+
+
+//object Command {
+//  final case object Quit extends EmptyCommand
+//  final case class Unknown(str: String) extends EmptyCommand
+//}
+
+//object Side2 {
+//  final case object Heads extends EmptyCommand
+//  final case object Tails extends EmptyCommand
+//}
+
 object GameIO {
-
-
   def showPrompt = IO.delay(print("\n(h)eads, (t)ails, or (q)uit: "))
 
   def getUserInput = IO.delay(StdIn.readLine().trim.toLowerCase)
 
-  def parseUserInput(input: String): IO[Option[Side]] = input match {
-    case "h" => IO.pure(Heads.some)
-    case "t" => IO.pure(Tails.some)
-    case "q" => IO.none[Side]
-    case _ => new IllegalArgumentException(s"Unknown input: ${input}").raiseError[IO, Option[Side]]
+  def parseUserInput(input: String): IO[Command] = input match {
+    case "h" => IO.pure(Heads2)
+    case "t" => IO.pure(Tails2)
+    case "q" => IO.pure(Quit)
+    case _ => IO.pure(Unknown(input))
+  }
+
+  def parseUserInput2(input: String): Command = input match {
+    case "h" => Heads2
+    case "t" => Tails2
+    case "q" => Quit
+    case _ => Unknown(input)
   }
 
   def printableFlipResult(flip: Side) = IO.pure(flip match {
@@ -76,8 +101,18 @@ object GameIO {
     case Tails => "Tails"
   }
 
+  def formatFlipResult2(flip: Side2) = flip match {
+    case Heads2 => "Heads"
+    case Tails2 => "Tails"
+  }
+
   def printGame(flipResult: Side, state: GameState) = {
     val str = formatFlipResult(flipResult)
+    IO.delay(println(s"Flip was: ${str}")) *> printGameState(state)
+  }
+
+  def printGame2(flipResult: Side2, state: GameState) = {
+    val str = formatFlipResult2(flipResult)
     IO.delay(println(s"Flip was: ${str}")) *> printGameState(state)
   }
 
@@ -89,7 +124,7 @@ object GameIO {
     IO.delay(println(s"Flips : ${state.flipsCount}, correct: ${state.correctGuesses}"))
   }
 
-  def calcualteState(tossResult: Side, userGuess: Side, state: GameState) = {
+  def calcualteState(tossResult: Side2, userGuess: Side2, state: GameState) = {
     val newState = if (tossResult == userGuess) {
       state.copy(flipsCount = state.flipsCount + 1, correctGuesses = state.correctGuesses + 1)
     }
@@ -103,6 +138,12 @@ object GameIO {
     IO.pure(r.nextInt(2) match {
       case 0 => Heads
       case 1 => Tails
+    })
+  }
+  def tossCoin2(r: Random) = {
+    IO.pure(r.nextInt(2) match {
+      case 0 => Heads2
+      case 1 => Tails2
     })
   }
 }
@@ -172,21 +213,24 @@ object GameApp extends IOApp {
         _ <- GameIO.showPrompt
         input <- GameIO.getUserInput
 //        token <- GameIO.parseUserInput(input)
-        token <- GameIO.parseUserInput(input).handleErrorWith(_ => IO.delay(println(s"unknown input: ${input}")).*>(IO.none))
+//        token <- GameIO.parseUserInput(input).handleErrorWith(_ => IO.delay(println(s"unknown input: ${input}")).*>(IO.none))
+        token = GameIO.parseUserInput2(input)
         new_state <- token match {
-          case Some(side) =>
-            IO.defer(for {
-              tossResult <- GameIO.tossCoin(r)
-              new_state <- GameIO.calcualteState(tossResult, side, state)
-              _ <- GameIO.printGame(side, new_state)
-            } yield new_state
-            )
-          case None => IO.pure(state)
+          case flip: Side2 =>
+            for {
+              tossResult <- GameIO.tossCoin2(r)
+              new_state <- GameIO.calcualteState(tossResult, flip, state)
+              _ <- GameIO.printGame2(flip, new_state)
+              _ <- mainLoop(new_state)
+            } yield ()
+
+          case Quit => IO.pure(state)
+          case Unknown(str) => IO.delay(println(s"unknown input: ${str}")).*>(mainLoop(state))
         }
-        _ <- input match {
-          case "q" => IO.unit
-          case _ => mainLoop(new_state)
-        }
+//        _ <- token match {
+//          case Quit => IO.unit
+//          case _ => mainLoop(new_state)
+//        }
       } yield ()
 
     for {
