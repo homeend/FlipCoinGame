@@ -4,6 +4,8 @@ import cats.Monad
 import cats.effect.{ExitCode, IO, IOApp, Sync}
 import cats.syntax.all._
 import example.Game._
+import example.Side.{Heads, Tails}
+import org.http4s.server.middleware.HttpMethodOverrider.HeaderOverrideStrategy
 
 import scala.annotation.tailrec
 import scala.io.StdIn
@@ -42,18 +44,41 @@ object Game {
   }
 }
 
+sealed trait Side
+
+object Side {
+  final case object Heads extends Side
+
+  final case object Tails extends Side
+}
+
 object GameIO {
+
+
   def showPrompt = IO.delay(print("\n(h)eads, (t)ails, or (q)uit: "))
 
   def getUserInput = IO.delay(StdIn.readLine().trim.toLowerCase)
 
-  def printableFlipResult(flip: String) = IO.pure(flip match {
-    case "h" => "Heads"
-    case "t" => "Tails"
+  def parseUserInput(input: String): IO[Option[Side]] = input match {
+    case "h" => IO.pure(Heads.some)
+    case "t" => IO.pure(Tails.some)
+    case "q" => IO.none[Side]
+    case _ => new IllegalArgumentException(s"Unknown input: ${input}").raiseError[IO, Option[Side]]
+  }
+
+  def printableFlipResult(flip: Side) = IO.pure(flip match {
+    case Heads => "Heads"
+    case Tails => "Tails"
   })
 
-  def printGame(printableResult: String, state: GameState) = {
-    IO.delay(println(s"Flip was: ${printableResult}")) *> printGameState(state)
+  def formatFlipResult(flip: Side) = flip match {
+    case Heads => "Heads"
+    case Tails => "Tails"
+  }
+
+  def printGame(flipResult: Side, state: GameState) = {
+    val str = formatFlipResult(flipResult)
+    IO.delay(println(s"Flip was: ${str}")) *> printGameState(state)
   }
 
   def printGameOver() = {
@@ -64,8 +89,8 @@ object GameIO {
     IO.delay(println(s"Flips : ${state.flipsCount}, correct: ${state.correctGuesses}"))
   }
 
-  def calcualteState(tossResult: String, input: String, state: GameState) = {
-    val newState = if (tossResult == input) {
+  def calcualteState(tossResult: Side, userGuess: Side, state: GameState) = {
+    val newState = if (tossResult == userGuess) {
       state.copy(flipsCount = state.flipsCount + 1, correctGuesses = state.correctGuesses + 1)
     }
     else {
@@ -76,8 +101,8 @@ object GameIO {
 
   def tossCoin(r: Random) = {
     IO.pure(r.nextInt(2) match {
-      case 0 => "h"
-      case 1 => "t"
+      case 0 => Heads
+      case 1 => Tails
     })
   }
 }
@@ -146,10 +171,18 @@ object GameApp extends IOApp {
       for {
         _ <- GameIO.showPrompt
         input <- GameIO.getUserInput
-        tossResult <- GameIO.tossCoin(r)
-        printableFlipResult <- GameIO.printableFlipResult(tossResult)
-        new_state <- GameIO.calcualteState(input, tossResult, state)
-        _ <- GameIO.printGame(printableFlipResult, new_state)
+//        token <- GameIO.parseUserInput(input)
+        token <- GameIO.parseUserInput(input).handleErrorWith(_ => IO.delay(println(s"unknown input: ${input}")).*>(IO.none))
+        new_state <- token match {
+          case Some(side) =>
+            IO.defer(for {
+              tossResult <- GameIO.tossCoin(r)
+              new_state <- GameIO.calcualteState(tossResult, side, state)
+              _ <- GameIO.printGame(side, new_state)
+            } yield new_state
+            )
+          case None => IO.pure(state)
+        }
         _ <- input match {
           case "q" => IO.unit
           case _ => mainLoop(new_state)
@@ -157,7 +190,7 @@ object GameApp extends IOApp {
       } yield ()
 
     for {
-      //      console <- IO.pure(Console[IO])
+//      _ <- mainLoop(state).handleErrorWith(_ => IO.delay(println(s"unknown input: ${input}")))
       _ <- mainLoop(state)
     } yield ExitCode.Success
   }
