@@ -1,8 +1,8 @@
-package example
+package org.homeend
 
 import cats.effect.{ExitCode, IO, IOApp, Sync}
 import cats.syntax.all._
-import example.Side.{Heads, Tails}
+import Side.{Heads, Tails}
 
 import scala.io.StdIn
 import scala.util.Random
